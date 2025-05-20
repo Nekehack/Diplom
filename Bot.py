@@ -10,7 +10,7 @@ from io import BytesIO
 import sqlite3
 
 #токен для подключения к боту
-token = '7433058915:AAHj5KtDTJ58OoGGUIayfWpDGOG3v0DnfgY'
+token = '74gY'
 
 #использование токена
 bot = telebot.TeleBot(token)
