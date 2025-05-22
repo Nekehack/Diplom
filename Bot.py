@@ -19,7 +19,7 @@ bot = telebot.TeleBot(token)
 
 #Словарь и константы для сохранения состояний
 user_states = {}
-WAITING_MENU, START, LOGIN, PASSWORD,PHOTO, WAITING_TEXT, DEV_BASE, WAITING_ID, WAITING_ANSWER, EDIT_LOGIN, EDIT_PASSWORD, ADMIN_ADD_USER = range(12)
+WAITING_MENU, START, LOGIN, PASSWORD,PHOTO, WAITING_TEXT, DEV_BASE, WAITING_ID, WAITING_ANSWER, EDIT_LOGIN, EDIT_PASSWORD, WAITING_REVIEW, ADMIN_ADD_USER = range(13)
 
 
 #Стартовая часть с проверкой логина и пароля
@@ -135,7 +135,8 @@ def work(message):
             button2 = types.InlineKeyboardButton("Тех.поддержка", callback_data='tech_help')
             button3 = types.InlineKeyboardButton("Информация про бота", callback_data='info')
             button4 = types.InlineKeyboardButton("Профиль", callback_data='profil')
-            markup.add(button1, button2, button3, button4)
+            button5 = types.InlineKeyboardButton("Отзыв", callback_data='review')
+            markup.add(button1, button2, button3, button4, button5)
             bot.send_message(message.chat.id, text="Вот доступные тебе функции", reply_markup=markup)
 
         #копки админа
@@ -209,7 +210,7 @@ def handle_callback(call):
     #переходы по функциям обычного пользователя
     if call.data == 'tech_help':
         user_states[call.message.chat.id] = WAITING_TEXT
-        bot.send_message(call.message.chat.id, 'Пожалуйста, введите описание вашей проблемы.')
+        bot.send_message(call.message.chat.id, 'Пожалуйста, введите описание вашей проблемы')
 
 
     elif call.data == 'info':
@@ -218,8 +219,9 @@ def handle_callback(call):
     elif call.data == 'profil':
         user_profil(call)
 
-    # elif call.data == 'exit':
-    #     work(call.message)
+    elif call.data == 'review':
+        user_states[call.message.chat.id] = WAITING_REVIEW
+        bot.send_message(call.message.chat.id, 'Напишите отзыв о работе бота, который хотите оставить')
 
     # переходы по функциям админа
     elif call.data == 'bd_read':
@@ -442,6 +444,22 @@ def edit_password(message):
     markup.add(button)
     bot.send_message(message.chat.id, text=f'{result[0]} ваш пароль изменён', reply_markup=markup)
 
+#функция по написаню отызва
+@bot.message_handler(func=lambda message: user_states.get(message.chat.id) == WAITING_REVIEW)
+def review(message):
+    text = message.text
+    print(text)
+
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    query = "INSERT INTO review (user_id=?, user_review=?) VAlUES (?, ?)"
+    data = (message.chat.id, text)
+    cursor.execute(query, data)
+
+    conn.commit()
+    conn.close()
+
 
 
 #функции админа
@@ -522,16 +540,29 @@ def add_user(message):
     conn = sqlite3.connect('bot_base.db')
     cursor = conn.cursor()
 
+    cursor.execute(f"SELECT * FROM users WHERE user_id={text[0]}")
+    result = cursor.fetchone()
+
+    if result:
+        markup = types.InlineKeyboardMarkup()
+        button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+        markup.add(button)
+        bot.send_message(message.chat.id, text='Такой пользоваетль уже есть', reply_markup=markup)
+
+    else:
+        cursor.execute("INSERT INTO users (user_id, user_name, login, password, role) VAlUES (?, ?, ?, ?, ?)",
+                       (text[0], text[1], text[2], text[3], text[4]))
+
+        markup = types.InlineKeyboardMarkup()
+        button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+        markup.add(button)
+        bot.send_message(message.chat.id, text='Пользователь добавлен', reply_markup=markup)
 
 
     conn.commit()
     conn.close()
 
-    print(text)
-
-
-
-
+    # print(text)
 
 
 def user_edit(call):
