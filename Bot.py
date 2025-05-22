@@ -17,7 +17,8 @@ bot = telebot.TeleBot(token)
 
 #Словарь и константы для сохранения состояний
 user_states = {}
-WAITING_MENU, START, LOGIN, PASSWORD,PHOTO, WAITING_TEXT, DEV_BASE, WAITING_ID, WAITING_ANSWER = range(9)
+WAITING_MENU, START, LOGIN, PASSWORD,PHOTO, WAITING_TEXT, DEV_BASE, WAITING_ID, WAITING_ANSWER, EDIT_LOGIN, EDIT_PASSWORD = range(11)
+
 
 #Стартовая часть с проверкой логина и пароля
 @bot.message_handler(commands=['start'])
@@ -126,16 +127,16 @@ def work(message):
         button1 = types.InlineKeyboardButton("Анализ изображения", callback_data='analyze_image')
         print("И тут")
         print(role)
-        if role == 'user':
 
+        #кнопки пользователя
+        if role == 'user':
             button2 = types.InlineKeyboardButton("Тех.поддержка", callback_data='tech_help')
             button3 = types.InlineKeyboardButton("Информация про бота", callback_data='info')
             button4 = types.InlineKeyboardButton("Профиль", callback_data='profil')
-            button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
-            markup.add(button1, button2, button)
+            markup.add(button1, button2, button3, button4)
             bot.send_message(message.chat.id, text="Вот доступные тебе функции", reply_markup=markup)
 
-        # Добавляем кнопку "Другая кнопка" только для админов
+        #копки админа
         elif role == 'admin':
             # добавить подключение к другим базам данных, на роль админ
 
@@ -156,15 +157,14 @@ def work(message):
             button7 = types.InlineKeyboardButton("Отзывы", callback_data='review')
             button8 = types.InlineKeyboardButton("Вопросы", callback_data='question')
             button9 = types.InlineKeyboardButton("Диалоги", callback_data='dialog')
-            button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
 
             markup.add(button1, button2,button3,
                        button4,button5,button6,
-                       button7, button8,button9,
-                       button)
+                       button7, button8,button9)
             bot.send_message(message.chat.id, text="Вот доступные тебе функции", reply_markup=markup)
             print('Да, ты админ')
 
+        # кнопки разработчика
         elif role =='developer':
 
             # посмотреть активность пользователей
@@ -183,7 +183,7 @@ def work(message):
 
             markup.add(button1, button2, button3,
                        button4, button5, button6,
-                       button7, button)
+                       button7)
 
             bot.send_message(message.chat.id, text="Вот доступные тебе функции", reply_markup=markup)
 
@@ -263,13 +263,22 @@ def handle_callback(call):
         help_tech_developer(call)
 
 
-    # elif call.data == 'exit':
-    #     work(call.message)
+    elif call.data == 'exit':
+        work(call.message)
 
 
 # Глубинные функции уровней пользователей
 
+    #глубокие функции пользователя
+    elif call.data == 'edit_login':
+        user_states[call.message.chat.id] = EDIT_LOGIN
+        bot.send_message(call.message.chat.id, 'Введите новый логин')
+        # edit_login(call)
 
+    elif call.data == 'edit_password':
+        user_states[call.message.chat.id] = EDIT_PASSWORD
+        bot.send_message(call.message.chat.id, text='Введите новый пароль')
+        # edit_password(call)
 
 #ВЫПОЛНЕНИЕ ВНЕШНИХ ФУНКЦИИ ПО УРОВНЯМ
 #Общая функция для анализа снимков
@@ -277,7 +286,16 @@ def analis(call):
     bot.send_message(call.message.chat.id, 'Вот твоё изображение')
     # сделать вызов загрузки нейронной сети
     print('Функция работает')
-    work(call.message)
+    markup = types.InlineKeyboardMarkup()
+    button1 = types.InlineKeyboardButton('Загрузить изображение', callback_data='analyze_image')
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+
+    #повторый вызов функции или выход в меню
+    markup.add(button1, button)
+    bot.send_message(call.message.chat.id, text='Хочешь загрузить сообщение или выйти в меню?', reply_markup=markup)
+
+
+    # work(call.message)
 
 
 
@@ -313,10 +331,101 @@ def tech_help_user(message):
 
 #выдаёт информацию о боте
 def bot_info(call):
-    print('bot info work')
+    bot.send_message(call.message.chat.id, text='Вот информация обо мне:')
+    bot.send_message(call.message.chat.id, text='Я медецинский Telegram-бот написанный для диплома')
+    bot.send_message(call.message.chat.id, text='Основная задача нейронных '
+                                                'сейтей, к котоырм я подклюёчн искать опухоли на снимках МРТ мозга человека'
+                                                'для помощи врачам в их обноружении')
+    bot.send_message(call.message.chat.id, text='Моя основная задача это помогать обычным пользователям '
+                                                'самим посмотреть свои снимки')
+    bot.send_message(call.message.chat.id, text='Ты так же можешь оставить комментарий по поводу работы со мной'
+                                                ' или задать вопросы технической поддержке, если у тебя что-то случилось')
+    bot.send_message(call.message.chat.id, text='В целом, это всё! Удачи.')
+
+    work(call.message)
 
 def user_profil(call):
     print('user profil work')
+
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    query = f"SELECT * FROM users WHERE user_id = '{call.message.chat.id}'"
+    cursor.execute(query)
+    result = cursor.fetchone()
+    print(result)
+
+    bot.send_message(call.message.chat.id, text=f'Ваше id: {result[1]}\n'
+                                                f'Ваше имя: {result[2]}\n'
+                                                f'Ваш логин: {result[3]}\n'
+                                                f'Ваш пароль: {result[4]}\n')
+
+    markup = types.InlineKeyboardMarkup()
+    button1 = types.InlineKeyboardButton('Сменить логин', callback_data='edit_login')
+    button2 = types.InlineKeyboardButton('Сменить пароль', callback_data='edit_password')
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+
+
+
+    # повторый вызов функции или выход в меню
+    markup.add(button1, button2, button)
+    bot.send_message(call.message.chat.id, text='Изменить параметры или выйти?', reply_markup=markup)
+
+    conn.commit()
+    conn.close()
+
+#глубокая функция по смене логина
+@bot.message_handler(func=lambda message: user_states.get(message.chat.id) == EDIT_LOGIN)
+def edit_login(message):
+    text = message.chat.id
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    query = "UPDATE users SET login=? WHERE user_id = ?"
+    data = (text, message.chat.id)
+    cursor.execute(query, data)
+
+    query = f"SELECT user_name FROM users WHERE user_id={message.chat.id}"
+    cursor.execute(query)
+    result = cursor.fetchone()
+
+    conn.commit()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup()
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+
+    # выход в меню
+    markup.add(button)
+    bot.send_message(message.chat.id, text=f'{result[0]} ваш логин изменён', reply_markup=markup)
+
+@bot.message_handler(func=lambda message: user_states.get(message.chat.id) == EDIT_PASSWORD)
+def edit_password(message):
+    text = message.chat.id
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    query = "UPDATE users SET password=? WHERE user_id=?"
+    data = (text, message.chat.id)
+    cursor.execute(query, data)
+    # cursor.execute("UPDATE users SET role = ? WHERE user_id = ? AND user_name = ?",
+    #                ('user', '815722883', 'Илья'))
+
+    query = f"SELECT user_name FROM users WHERE user_id={message.chat.id}"
+    cursor.execute(query)
+    result = cursor.fetchone()
+
+    conn.commit()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup()
+
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+
+    #выход в меню
+    markup.add(button)
+    bot.send_message(message.chat.id, text=f'{result[0]} ваш пароль изменён', reply_markup=markup)
+
 
 
 #функции админа
@@ -400,54 +509,5 @@ def write_user_id(message):
     if result:
         cursor.execute(f'INSERT INTO help_history (assistant_id, assistant_answer) VAlUES (?, ?)', (message.chat.id, text[1]))
         bot.send_message(text[0], text=f'Здарвствуйте, ответ тех. поддержки, на ваш запрос: {text[1]}')
-
-
-    # print(text[0], '-', text[1])
-    # bot.send_message(call.message.chat.id, text='')
-
-
-
-
-
-
-
-# def user(call):
-#     markup = types.InlineKeyboardMarkup()
-#     button1 = types.InlineKeyboardButton("Выход", callback_data='tzkjsdh')
-#     markup.add(button1)
-#     bot.send_message(call.message.chat.id, text="Вот доступные тебе функции", reply_markup=markup)
-#
-#     if call.data == 'tzkjsdh':
-#         print("Привет")
-#
-# #функции для админа
-# def admin(call):
-#     bot.send_message(call.message.chat.id, 'Вот, что я могу для тебя сделать')
-#     work(call.message)
-
-    #посмотреть список пользователей
-    #посмотреть активность пользователей
-    #удалить, добавить пользователя
-    #изменить роль пользователю
-    #смотреть настроки бота у пользователей
-    # посмотреть отзывы
-    # посмотреть часто задаваемые вопросы
-    # посмотреть диалог пользователей с ботом
-
-    # pass
-
-
-#функции для разработчика
-# def developer(message):
-#     bot.send_message(message.chat.id, 'Доступ к какой базе данных нужен?')
-#     work(message)
-
-    # user_states[message.chat.id] = PASSWORD
-
-    # посмотреть активность пользователей
-    # посмотреть настроки бота у пользователей
-    # посмотреть предсказания модели у пуользователей
-    # посмотреть структуру основной модели
-    # посмотреть диалог с ботов
 
 bot.infinity_polling()
