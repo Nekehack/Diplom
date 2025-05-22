@@ -19,7 +19,7 @@ bot = telebot.TeleBot(token)
 
 #Словарь и константы для сохранения состояний
 user_states = {}
-WAITING_MENU, START, LOGIN, PASSWORD,PHOTO, WAITING_TEXT, DEV_BASE, WAITING_ID, WAITING_ANSWER, EDIT_LOGIN, EDIT_PASSWORD, WAITING_REVIEW, ADMIN_ADD_USER = range(13)
+WAITING_MENU, START, LOGIN, PASSWORD,PHOTO, WAITING_TEXT, DEV_BASE, WAITING_ID, WAITING_ANSWER, EDIT_LOGIN, EDIT_PASSWORD, WAITING_REVIEW, ADMIN_ADD_USER, ADMIN_USER_EDIT = range(14)
 
 
 #Стартовая часть с проверкой логина и пароля
@@ -238,7 +238,10 @@ def handle_callback(call):
 
 
     elif call.data == 'user_edit':
-        user_edit(call)
+        # user_edit(call)
+        user_states[call.message.chat.id] = ADMIN_USER_EDIT
+        bot.send_message(call.message.chat.id, text='Введите id пользователя, параметры которого хотите поменять:'
+                                                    'id, его лоигн и пароль, а так же его роль')
 
     elif call.data == 'user_bot':
         bot_user_setting(call)
@@ -565,14 +568,32 @@ def add_user(message):
     # print(text)
 
 
-def user_edit(call):
+def user_edit(message):
     print('user edit')
+
+    text = message.text
+    text = text.split(':')
+
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    cursor.execute(f"SELECT * FROM users WHERE user_id={text[0]}")
+    result = cursor.fetchone()
+
+    cursor.execute(f"UPDATE users SET login=? AND password=? AND role=? WHERE user_id='{text[0]}",
+                   (text[0], text[1], text[2]))
+
+    markup = types.InlineKeyboardMarkup()
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+    markup.add(button)
+    bot.send_message(message.chat.id, text='Пользователь изменён', reply_markup=markup)
 
 def bot_user_setting(call):
     print('ueser settings bot')
 
 def review(call):
     print('review')
+
 
 def question(call):
     print('quastion')
