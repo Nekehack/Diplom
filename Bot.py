@@ -7,6 +7,8 @@ from torchvision import transforms
 from PIL import Image
 from io import BytesIO
 
+import pandas as pd
+import os
 import sqlite3
 
 #токен для подключения к боту
@@ -17,7 +19,7 @@ bot = telebot.TeleBot(token)
 
 #Словарь и константы для сохранения состояний
 user_states = {}
-WAITING_MENU, START, LOGIN, PASSWORD,PHOTO, WAITING_TEXT, DEV_BASE, WAITING_ID, WAITING_ANSWER, EDIT_LOGIN, EDIT_PASSWORD = range(11)
+WAITING_MENU, START, LOGIN, PASSWORD,PHOTO, WAITING_TEXT, DEV_BASE, WAITING_ID, WAITING_ANSWER, EDIT_LOGIN, EDIT_PASSWORD, ADMIN_ADD_USER = range(12)
 
 
 #Стартовая часть с проверкой логина и пароля
@@ -227,7 +229,11 @@ def handle_callback(call):
         activity(call)
 
     elif call.data == 'add':
-        add_user(call)
+        # add_user(call)
+        user_states[call.message.chat.id] = ADMIN_ADD_USER
+        bot.send_message(call.message.chat.id, text='Введите id нового пользователя, имя, '
+                                                    'его лоигн и пароль, а так же его роль')
+
 
     elif call.data == 'user_edit':
         user_edit(call)
@@ -279,6 +285,15 @@ def handle_callback(call):
         user_states[call.message.chat.id] = EDIT_PASSWORD
         bot.send_message(call.message.chat.id, text='Введите новый пароль')
         # edit_password(call)
+
+    #глубинные функции админа
+    #взятие файлов из таблицы users
+    elif call.data == 'admin_users_csv':
+        send_amind_users_csv(call)
+
+    elif call.data == 'admin_users_xlsx':
+        send_amind_users_xlsx(call)
+
 
 #ВЫПОЛНЕНИЕ ВНЕШНИХ ФУНКЦИИ ПО УРОВНЯМ
 #Общая функция для анализа снимков
@@ -399,6 +414,7 @@ def edit_login(message):
     markup.add(button)
     bot.send_message(message.chat.id, text=f'{result[0]} ваш логин изменён', reply_markup=markup)
 
+#глубокая функция по смене пароля
 @bot.message_handler(func=lambda message: user_states.get(message.chat.id) == EDIT_PASSWORD)
 def edit_password(message):
     text = message.chat.id
@@ -429,14 +445,94 @@ def edit_password(message):
 
 
 #функции админа
+#функция для отправки файлов из таблицы users
 def info_user_bd(call):
     print('bd read work')
+
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+    # df = pd.read_sql_query("SELECT * FROM users", conn)
+    # df.to_csv('/Bot/bd_users.csv', index=False)
+    # df.to_excel('/Bot/bd_users.xlsx', index=False, engine='openpyxl')
+
+    conn.commit()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup()
+    button1 = types.InlineKeyboardButton('CSV', callback_data='admin_users_csv')
+    button2 = types.InlineKeyboardButton('XLSX', callback_data='admin_users_xlsx')
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+
+    markup.add(button1, button2, button)
+    bot.send_message(call.message.chat.id, text='В каком формате предоставить данные?', reply_markup=markup)
+
+#отправка файла с данными пользователей в csv
+def send_amind_users_csv(call):
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    df = pd.read_sql_query("SELECT * FROM users", conn)
+    df.to_csv('bd_users.csv', index=False)
+
+    # Открываем файл и отправляем его пользователю
+    with open('bd_users.csv', 'rb') as f:
+        bot.send_document(call.message.chat.id, f, caption="Вот список пользователей")
+        os.remove('bd_users.csv')
+
+    conn.commit()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup()
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+    markup.add(button)
+    bot.send_message(call.message.chat.id, text='Данные предсоатвлены', reply_markup=markup)
+
+#отправка файла с данными пользователей в xlsx
+def send_amind_users_xlsx(call):
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    df = pd.read_sql_query("SELECT * FROM users", conn)
+    df.to_excel('bd_users.xlsx', index=False, engine='openpyxl')
+
+    # Открываем файл и отправляем его пользователю
+    with open('bd_users.xlsx', 'rb') as f:
+        bot.send_document(call.message.chat.id, f, caption="Вот список пользователей")
+        os.remove('bd_users.xlsx')
+
+    conn.commit()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup()
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+    markup.add(button)
+    bot.send_message(call.message.chat.id, text='Данные предсоатвлены', reply_markup=markup)
+
+
 
 def activity(call):
     print('activity')
 
-def add_user(call):
+@bot.message_handler(func=lambda message: user_states.get(message.chat.id) == ADMIN_ADD_USER)
+def add_user(message):
     print('add user')
+    text = message.text
+    text=text.split(':')
+
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+
+
+    conn.commit()
+    conn.close()
+
+    print(text)
+
+
+
+
+
 
 def user_edit(call):
     print('user edit')
@@ -463,6 +559,8 @@ def bot_predict(call):
 def model_struct(call):
     print('ыекгс')
 
+
+#функция обработки запроса пользователя
 @bot.message_handler(func=lambda message: user_states.get(message.chat.id) == DEV_BASE)
 def help_tech_developer(call):
     print('Function work')
@@ -494,6 +592,8 @@ def help_tech_developer(call):
     bot.send_message(call.message.chat.id, text='Введи id пользователя и ответ')
 
     # work(call.message)
+
+#функция ответа техподдержки
 @bot.message_handler(func=lambda message: user_states.get(message.chat.id) == WAITING_ID)
 def write_user_id(message):
     #классический список, первый ушёл, первый ушёл
