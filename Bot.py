@@ -599,15 +599,9 @@ def user_edit(message):
 def bot_user_setting(call):
     print('ueser settings bot')
 
-#функция отправки файлово по отзывам пользователей
+#функция админа отправки файлово по отзывам пользователей
 def review_admin(call):
     print('review')
-
-    conn = sqlite3.connect('bot_base.db')
-    cursor = conn.cursor()
-
-    conn.commit()
-    conn.close()
 
     markup = types.InlineKeyboardMarkup()
     button1 = types.InlineKeyboardButton('CSV', callback_data='admin_review_csv')
@@ -661,6 +655,56 @@ def dmin_review_xlsx(call):
 
 def question(call):
     print('quastion')
+
+    markup = types.InlineKeyboardMarkup()
+    button1 = types.InlineKeyboardButton('CSV', callback_data='admin_question_csv')
+    button2 = types.InlineKeyboardButton('XLSX', callback_data='admin_question_xlsx')
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+
+    markup.add(button1, button2, button)
+    bot.send_message(call.message.chat.id, text='В каком формате предоставить данные?', reply_markup=markup)
+
+#глубокуя функция отправки csv
+def admin_question_csv(call):
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    df = pd.read_sql_query("SELECT * FROM question", conn)
+    df.to_csv('bd_question.csv', index=False)
+
+    # Открываем файл и отправляем его пользователю
+    with open('bd_question.csv', 'rb') as f:
+        bot.send_document(call.message.chat.id, f, caption="Вот список отзывов")
+        os.remove('bd_question.csv')
+
+    conn.commit()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup()
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+    markup.add(button)
+    bot.send_message(call.message.chat.id, text='Данные предсоатвлены', reply_markup=markup)
+
+def dmin_question_xlsx(call):
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    df = pd.read_sql_query("SELECT * FROM question", conn)
+    df.to_excel('bd_question.xlsx', index=False, engine='openpyxl')
+
+    # Открываем файл и отправляем его пользователю
+    with open('bd_м.xlsx', 'rb') as f:
+        bot.send_document(call.message.chat.id, f, caption="Вот список отзывов")
+        os.remove('bd_question.xlsx')
+
+    conn.commit()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup()
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+    markup.add(button)
+    bot.send_message(call.message.chat.id, text='Данные предсоатвлены', reply_markup=markup)
+
 
 def dialogs(call):
     print('dialog')
