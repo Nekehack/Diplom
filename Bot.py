@@ -314,6 +314,13 @@ def handle_callback(call):
     elif call.data == 'admin_review_xlsx':
         admin_review_csv(call)
 
+    # взятие файлов из таблицы вопросы
+    elif call.data == 'admin_question_csv':
+        admin_question_csv(call)
+
+    elif call.data == 'admin_question_xlsx':
+        admin_question_xlsx(call)
+
     #отправка сообщения пользователю
     elif call.data == 'send_admin_message':
         user_states[call.message.chat.id] = ADMIN_WRITE_USER
@@ -728,8 +735,9 @@ def question(call):
     markup.add(button1, button2, button)
     bot.send_message(call.message.chat.id, text='В каком формате предоставить данные?', reply_markup=markup)
 
-#глубокуя функция отправки csv по частым вопросам пользователей в формате csv
+#глубокуя функция отправки файла по частым вопросам пользователей в формате csv
 def admin_question_csv(call):
+    # print('admin_question_csv')
     conn = sqlite3.connect('bot_base.db')
     cursor = conn.cursor()
 
@@ -749,8 +757,8 @@ def admin_question_csv(call):
     markup.add(button)
     bot.send_message(call.message.chat.id, text='Данные предсоатвлены', reply_markup=markup)
 
-#глубокуя функция отправки csv по частым вопросам пользователей в формате xlsx
-def dmin_question_xlsx(call):
+#глубокуя функция отправки файла по частым вопросам пользователей в формате xlsx
+def admin_question_xlsx(call):
     conn = sqlite3.connect('bot_base.db')
     cursor = conn.cursor()
 
@@ -758,7 +766,7 @@ def dmin_question_xlsx(call):
     df.to_excel('bd_question.xlsx', index=False, engine='openpyxl')
 
     # Открываем файл и отправляем его пользователю
-    with open('bd_м.xlsx', 'rb') as f:
+    with open('bd_question.xlsx', 'rb') as f:
         bot.send_document(call.message.chat.id, f, caption="Вот список отзывов")
         os.remove('bd_question.xlsx')
 
