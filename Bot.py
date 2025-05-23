@@ -157,7 +157,7 @@ def work(message):
             button4 = types.InlineKeyboardButton("Добавить пользователя", callback_data='add')
             button5 = types.InlineKeyboardButton("Изменить роль пользователя", callback_data='user_edit')
             button6 = types.InlineKeyboardButton("Смотерть настройки бота у польщователя", callback_data='user_bot')
-            button7 = types.InlineKeyboardButton("Отзывы", callback_data='review')
+            button7 = types.InlineKeyboardButton("Отзывы", callback_data='review_admin')
             button8 = types.InlineKeyboardButton("Вопросы", callback_data='question')
             button9 = types.InlineKeyboardButton("Диалоги", callback_data='dialog')
 
@@ -246,8 +246,8 @@ def handle_callback(call):
     elif call.data == 'user_bot':
         bot_user_setting(call)
 
-    elif call.data == 'review':
-        review(call)
+    elif call.data == 'review_admin':
+        review_admin(call)
 
     elif call.data == 'question':
         question(call)
@@ -298,6 +298,12 @@ def handle_callback(call):
 
     elif call.data == 'admin_users_xlsx':
         send_amind_users_xlsx(call)
+
+    elif call.data == 'admin_review_csv':
+        admin_review_csv(call)
+
+    elif call.data == 'admin_review_xlsx':
+        admin_review_csv(call)
 
 
 #ВЫПОЛНЕНИЕ ВНЕШНИХ ФУНКЦИИ ПО УРОВНЯМ
@@ -449,7 +455,7 @@ def edit_password(message):
 
 #функция по написаню отызва
 @bot.message_handler(func=lambda message: user_states.get(message.chat.id) == WAITING_REVIEW)
-def review(message):
+def review_user(message):
     text = message.text
     print(text)
 
@@ -470,14 +476,14 @@ def review(message):
 def info_user_bd(call):
     print('bd read work')
 
-    conn = sqlite3.connect('bot_base.db')
-    cursor = conn.cursor()
+    # conn = sqlite3.connect('bot_base.db')
+    # cursor = conn.cursor()
     # df = pd.read_sql_query("SELECT * FROM users", conn)
     # df.to_csv('/Bot/bd_users.csv', index=False)
     # df.to_excel('/Bot/bd_users.xlsx', index=False, engine='openpyxl')
 
-    conn.commit()
-    conn.close()
+    # conn.commit()
+    # conn.close()
 
     markup = types.InlineKeyboardMarkup()
     button1 = types.InlineKeyboardButton('CSV', callback_data='admin_users_csv')
@@ -582,6 +588,8 @@ def user_edit(message):
 
     cursor.execute(f"UPDATE users SET login=? AND password=? AND role=? WHERE user_id='{text[0]}",
                    (text[0], text[1], text[2]))
+    conn.commit()
+    conn.close()
 
     markup = types.InlineKeyboardMarkup()
     button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
@@ -591,8 +599,64 @@ def user_edit(message):
 def bot_user_setting(call):
     print('ueser settings bot')
 
-def review(call):
+#функция отправки файлово по отзывам пользователей
+def review_admin(call):
     print('review')
+
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    conn.commit()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup()
+    button1 = types.InlineKeyboardButton('CSV', callback_data='admin_review_csv')
+    button2 = types.InlineKeyboardButton('XLSX', callback_data='admin_review_xlsx')
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+
+    markup.add(button1, button2, button)
+    bot.send_message(call.message.chat.id, text='В каком формате предоставить данные?', reply_markup=markup)
+
+#глубокуя функция отправки csv
+def admin_review_csv(call):
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    df = pd.read_sql_query("SELECT * FROM review", conn)
+    df.to_csv('bd_review.csv', index=False)
+
+    # Открываем файл и отправляем его пользователю
+    with open('bd_review.csv', 'rb') as f:
+        bot.send_document(call.message.chat.id, f, caption="Вот список отзывов")
+        os.remove('bd_review.csv')
+
+    conn.commit()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup()
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+    markup.add(button)
+    bot.send_message(call.message.chat.id, text='Данные предсоатвлены', reply_markup=markup)
+
+def dmin_review_xlsx(call):
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    df = pd.read_sql_query("SELECT * FROM review", conn)
+    df.to_excel('bd_review.xlsx', index=False, engine='openpyxl')
+
+    # Открываем файл и отправляем его пользователю
+    with open('bd_review.xlsx', 'rb') as f:
+        bot.send_document(call.message.chat.id, f, caption="Вот список отзывов")
+        os.remove('bd_review.xlsx')
+
+    conn.commit()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup()
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+    markup.add(button)
+    bot.send_message(call.message.chat.id, text='Данные предсоатвлены', reply_markup=markup)
 
 
 def question(call):
