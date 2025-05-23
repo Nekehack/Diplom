@@ -19,7 +19,7 @@ bot = telebot.TeleBot(token)
 
 #Словарь и константы для сохранения состояний
 user_states = {}
-WAITING_MENU, START, LOGIN, PASSWORD,PHOTO, WAITING_TEXT, DEV_BASE, WAITING_ID, WAITING_ANSWER, EDIT_LOGIN, EDIT_PASSWORD, WAITING_REVIEW, ADMIN_ADD_USER, ADMIN_USER_EDIT = range(14)
+WAITING_MENU, START, LOGIN, PASSWORD,PHOTO, WAITING_TEXT, DEV_BASE, WAITING_ID, WAITING_ANSWER, EDIT_LOGIN, EDIT_PASSWORD, WAITING_REVIEW, ADMIN_ADD_USER, ADMIN_USER_EDIT, ADMIN_WRITE_USER = range(15)
 
 
 #Стартовая часть с проверкой логина и пароля
@@ -300,18 +300,24 @@ def handle_callback(call):
     elif call.data == 'admin_users_xlsx':
         send_amind_users_xlsx(call)
 
+    #взятие файлов из таблицы настройки
     elif call.data == 'bot_settings_admin_csv':
         bot_settings_admin_csv(call)
 
     elif call.data == 'bot_settings_admin_xlsx':
         bot_settings_admin_xlsx(call)
 
-
+    #взятие файлов из таблицы отзывы
     elif call.data == 'admin_review_csv':
         admin_review_csv(call)
 
     elif call.data == 'admin_review_xlsx':
         admin_review_csv(call)
+
+    #отправка сообщения пользователю
+    elif call.data == 'send_admin_message':
+        user_states[call.message.chat.id] = ADMIN_WRITE_USER
+        bot.send_message(call.message.chat.id, 'Введите сообщение для пользователя')
 
 
 #ВЫПОЛНЕНИЕ ВНЕШНИХ ФУНКЦИИ ПО УРОВНЯМ
@@ -323,6 +329,8 @@ def analis(call):
     markup = types.InlineKeyboardMarkup()
     button1 = types.InlineKeyboardButton('Загрузить изображение', callback_data='analyze_image')
     button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+
+
 
     #повторый вызов функции или выход в меню
     markup.add(button1, button)
@@ -762,9 +770,47 @@ def dmin_question_xlsx(call):
     markup.add(button)
     bot.send_message(call.message.chat.id, text='Данные предсоатвлены', reply_markup=markup)
 
-
+#отправка сообщения пользователю
 def dialogs(call):
     print('dialog')
+
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    query = "SELECT user_id, user_name, role FROM users"
+    cursor.execute(query)
+    result = cursor.fetchall()
+
+    user_list = []
+
+    for row in result:
+        print(row)
+        user_list.append(row)
+    # print(user_list[1])
+
+    bot.send_message(call.message.chat.id, text='Текущие пользователи')
+    for i in range(len(user_list)):
+        bot.send_message(call.message.chat.id, text=f'{user_list[i][0]}:{user_list[i][1]} - {user_list[i][2]}')
+    conn.commit()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup()
+    button1 = types.InlineKeyboardButton("Отправить сообщени", callback_data='send_admin_message')
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+    markup.add(button1, button)
+
+
+    bot.send_message(call.message.chat.id, text='Записать сообщение?', reply_markup=markup)
+
+@bot.message_handler(func=lambda message: user_states.get(message.chat.id) == ADMIN_WRITE_USER)
+def send_admin_message(message):
+    print('send_admin_message')
+    text = message.text
+    text = text.split(":")
+
+    bot.send_message(text[0], text=f'{text[1]}')
+
+
 
 #функции разработчика
 def bot_settings(call):
