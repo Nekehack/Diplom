@@ -156,7 +156,7 @@ def work(message):
             button3 = types.InlineKeyboardButton("Активность пользователей", callback_data='activity')
             button4 = types.InlineKeyboardButton("Добавить пользователя", callback_data='add')
             button5 = types.InlineKeyboardButton("Изменить роль пользователя", callback_data='user_edit')
-            button6 = types.InlineKeyboardButton("Смотерть настройки бота у польщователя", callback_data='user_bot')
+            button6 = types.InlineKeyboardButton("Смотерть настройки бота", callback_data='bot_settings_admin')
             button7 = types.InlineKeyboardButton("Отзывы", callback_data='review_admin')
             button8 = types.InlineKeyboardButton("Вопросы", callback_data='question')
             button9 = types.InlineKeyboardButton("Диалоги", callback_data='dialog')
@@ -243,8 +243,9 @@ def handle_callback(call):
         bot.send_message(call.message.chat.id, text='Введите id пользователя, параметры которого хотите поменять:'
                                                     'id, его лоигн и пароль, а так же его роль')
 
-    elif call.data == 'user_bot':
-        bot_user_setting(call)
+    elif call.data == 'bot_settings_admin':
+        print('sdkjfh')
+        bot_settings_admin(call)
 
     elif call.data == 'review_admin':
         review_admin(call)
@@ -298,6 +299,13 @@ def handle_callback(call):
 
     elif call.data == 'admin_users_xlsx':
         send_amind_users_xlsx(call)
+
+    elif call.data == 'bot_settings_admin_csv':
+        bot_settings_admin_csv(call)
+
+    elif call.data == 'bot_settings_admin_xlsx':
+        bot_settings_admin_xlsx(call)
+
 
     elif call.data == 'admin_review_csv':
         admin_review_csv(call)
@@ -596,8 +604,56 @@ def user_edit(message):
     markup.add(button)
     bot.send_message(message.chat.id, text='Пользователь изменён', reply_markup=markup)
 
-def bot_user_setting(call):
+def bot_settings_admin(call):
     print('ueser settings bot')
+
+    markup = types.InlineKeyboardMarkup()
+    button1 = types.InlineKeyboardButton('CSV', callback_data='bot_settings_admin_csv')
+    button2 = types.InlineKeyboardButton('XLSX', callback_data='bot_settings_admin_xlsx')
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+
+    markup.add(button1, button2, button)
+    bot.send_message(call.message.chat.id, text='В каком формате предоставить данные по настройкам бота?', reply_markup=markup)
+
+def bot_settings_admin_csv(call):
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    df = pd.read_sql_query("SELECT * FROM bot_settings", conn)
+    df.to_csv('bd_bot_settings.csv', index=False)
+
+    # Открываем файл и отправляем его пользователю
+    with open('bd_bot_settings.csv', 'rb') as f:
+        bot.send_document(call.message.chat.id, f, caption="Вот список настроек бота")
+        os.remove('bd_bot_settings.csv')
+
+    conn.commit()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup()
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+    markup.add(button)
+    bot.send_message(call.message.chat.id, text='Данные предсоатвлены', reply_markup=markup)
+
+def bot_settings_admin_xlsx(call):
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    df = pd.read_sql_query("SELECT * FROM bot_settings", conn)
+    df.to_excel('bd_bot_settings.xlsx', index=False, engine='openpyxl')
+
+    # Открываем файл и отправляем его пользователю
+    with open('bd_bot_settings.xlsx', 'rb') as f:
+        bot.send_document(call.message.chat.id, f, caption="Вот список настроек бота")
+        os.remove('bd_bot_settings.xlsx')
+
+    conn.commit()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup()
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+    markup.add(button)
+    bot.send_message(call.message.chat.id, text='Данные предсоатвлены', reply_markup=markup)
 
 #функция админа отправки файлово по отзывам пользователей
 def review_admin(call):
@@ -664,7 +720,7 @@ def question(call):
     markup.add(button1, button2, button)
     bot.send_message(call.message.chat.id, text='В каком формате предоставить данные?', reply_markup=markup)
 
-#глубокуя функция отправки csv
+#глубокуя функция отправки csv по частым вопросам пользователей в формате csv
 def admin_question_csv(call):
     conn = sqlite3.connect('bot_base.db')
     cursor = conn.cursor()
@@ -685,6 +741,7 @@ def admin_question_csv(call):
     markup.add(button)
     bot.send_message(call.message.chat.id, text='Данные предсоатвлены', reply_markup=markup)
 
+#глубокуя функция отправки csv по частым вопросам пользователей в формате xlsx
 def dmin_question_xlsx(call):
     conn = sqlite3.connect('bot_base.db')
     cursor = conn.cursor()
@@ -712,6 +769,21 @@ def dialogs(call):
 #функции разработчика
 def bot_settings(call):
     print('bot settings')
+
+    # markup = types.InlineKeyboardMarkup()
+    # button1 = types.InlineKeyboardButton('CSV', callback_data='bot_settings_admin_csv')
+    # button2 = types.InlineKeyboardButton('XLSX', callback_data='bot_settings_admin_xlsx')
+    # button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+    #
+    # markup.add(button1, button2, button)
+    # bot.send_message(call.message.chat.id, text='В каком формате предоставить данные?', reply_markup=markup)
+
+
+def bot_settings_develper_csv(call):
+    pass
+
+def bot_settings_developer_xlsx(call):
+    pass
 
 def bot_predict(call):
     print('predict')
