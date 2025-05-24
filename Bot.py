@@ -479,13 +479,14 @@ def edit_password(message):
 #функция по написаню отызва
 @bot.message_handler(func=lambda message: user_states.get(message.chat.id) == WAITING_REVIEW)
 def review_user(message):
+    print('review')
     text = message.text
     print(text)
 
     conn = sqlite3.connect('bot_base.db')
     cursor = conn.cursor()
 
-    query = "INSERT INTO review (user_id=?, user_review=?) VAlUES (?, ?)"
+    query = "INSERT INTO review (user_id, user_review) VALUES (?, ?)"
     data = (message.chat.id, text)
     cursor.execute(query, data)
 
