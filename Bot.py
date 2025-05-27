@@ -717,10 +717,30 @@ def twc(message):
             bot.send_photo(message.chat.id, photo=photo)
         os.remove('mrt.jpg')
 
-        bot.send_message(message.chat.id, text=f'Предсказания модели: {preds}')
+        answer = 'Есть образование в мозге' if preds > 0.5 else 'Опухоль на предсотавленном снимке не обнаружена'
+
+        bot.send_message(message.chat.id, text=f'Предсказания модели: {answer}')
         user_states[message.chat.id] = None
     except Exception as e:
         print('e')
+
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    text = f'Использование модели TWCLow, предсказание: {preds}'
+
+    query = "INSERT INTO user_activity (user_id, activity, time) VALUES (?, ?, datetime('now'))"
+    data = (message.chat.id, text)
+
+
+    query = "INSERT INTO predictions (user_id, predictions, answer, time) VALUES (?, ?, datetime('now'))"
+    data = (message.chat.id, preds, answer)
+    cursor.execute(query, data)
+
+    conn.commit()
+    conn.close()
+
+
 
 
 
@@ -749,10 +769,17 @@ def tech_help_user(message):
     # сбрасываем состояние
     # user_states[call.message.chat.id] = None
     user_states[message.chat.id] = WAITING_MENU
-    work(message)
+
+    text = 'Обращение в тех.поддержку'
+    query = "INSERT INTO user_activity (user_id, activity, time) VALUES (?, ?, datetime('now'))"
+    data = (message.chat.id, text)
+
+    cursor.execute(query, data)
 
     conn.commit()
     conn.close()
+
+    work(message)
 
 #выдаёт информацию о боте
 def bot_info(call):
@@ -1191,11 +1218,19 @@ def dialogs(call):
 def send_admin_message(message):
     print('send_admin_message')
     text = message.text
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    query = "INSERT INTO communication (user_id, user_name, user_role, user_message, time) VALUES (?,?,?,?, datetime('now'))"
+    data = (str(message.chat.id), str(message.from_user.first_name), 'admin', str(text))
+    cursor.execute(query, data)
+
     text = text.split(":")
 
     bot.send_message(text[0], text=f'{text[1]}')
 
-
+    conn.commit()
+    conn.close()
 
 #функции разработчика
 def bot_settings(call):
@@ -1243,9 +1278,6 @@ def help_tech_developer(call):
 
         bot.send_message(call.message.chat.id, text=f'Пользователь {user_name} c id: {user_id} обратился с такой проблемой: "{user_problem}"')
     # user_states[call.message.chat.id] =
-
-
-
     conn.commit()
     conn.close()
 
@@ -1259,12 +1291,20 @@ def help_tech_developer(call):
 #функция ответа техподдержки
 @bot.message_handler(func=lambda message: user_states.get(message.chat.id) == WAITING_ID)
 def write_user_id(message):
-    #классический список, первый ушёл, первый ушёл
-    text = message.text
-    text = text.split(':')
-
+    #функция выведет на экран разработчику списки пользователей,
+    #разработчик сможет ввести сообщение в формате "id пользователя:сообщение"
     conn = sqlite3.connect('bot_base.db')
     cursor = conn.cursor()
+
+    text = message.text
+
+    #данные заносятся в таблицу коммуникаций для анализа в случае проблем с ботом
+    query = "INSERT INTO communication (user_id, user_name, user_role, user_message, time) VALUES (?,?,?,?, datetime('now'))"
+    data = (str(message.chat.id), str(message.from_user.first_name), 'developer', str(text))
+    cursor.execute(query, data)
+
+    text = text.split(':')
+
 
     query = f'SELECT * FROM help_history WHERE user_id = {text[0]}'
     cursor.execute(query)
@@ -1272,5 +1312,9 @@ def write_user_id(message):
     if result:
         cursor.execute(f'INSERT INTO help_history (assistant_id, assistant_answer) VAlUES (?, ?)', (message.chat.id, text[1]))
         bot.send_message(text[0], text=f'Здарвствуйте, ответ тех. поддержки, на ваш запрос: {text[1]}')
+
+
+    conn.commit()
+    conn.close()
 
 bot.infinity_polling()
