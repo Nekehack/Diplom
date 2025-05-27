@@ -356,6 +356,13 @@ def handle_callback(call):
     elif call.data == 'bot_settings_developer_xlsx':
         bot_settings_developer_xlsx(call)
 
+    #взятие файлов по предсказаниям моделей
+    elif call.data == 'bot_predictions_developer_csv':
+        bot_predictions_developer_csv(call)
+
+    elif call.data == 'bot_predictions_developer_xlsx':
+        bot_predictions_developer_xlsx(call)
+
 #ВЫПОЛНЕНИЕ ВНЕШНИХ ФУНКЦИИ ПО УРОВНЯМ
 #Общая функция для анализа снимков
 def analis(call):
@@ -699,6 +706,7 @@ def thc(message):
 
 @bot.message_handler(content_types=['photo'], func=lambda m: user_states.get(m.chat.id) == TWC_PHOTO)
 def twc(message):
+    #загрузка и использование модели
     try:
         photo_list = message.photo
         largest_photo = photo_list[-1]
@@ -721,7 +729,7 @@ def twc(message):
         preds = model.predict(x)
         print(preds)
 
-        photo_path = 'mrt.jpg'
+        #отправка файла с результатами в чат
         with open('mrt.jpg', 'rb') as photo:
             bot.send_photo(message.chat.id, photo=photo)
         os.remove('mrt.jpg')
@@ -736,11 +744,12 @@ def twc(message):
     conn = sqlite3.connect('bot_base.db')
     cursor = conn.cursor()
 
+    #загрузка данных в таблицы по активности пользователя и предсказаниям
     text = f'Использование модели TWCLow, предсказание: {preds}'
 
     query = "INSERT INTO user_activity (user_id, activity, time) VALUES (?, ?, datetime('now'))"
     data = (message.chat.id, text)
-
+    cursor.execute(query, data)
 
     query = "INSERT INTO predictions (user_id, predictions, answer, time) VALUES (?, ?, datetime('now'))"
     data = (message.chat.id, preds, answer)
@@ -748,10 +757,6 @@ def twc(message):
 
     conn.commit()
     conn.close()
-
-
-
-
 
 #функции обычного пользователя
 @bot.message_handler(func=lambda message: user_states.get(message.chat.id) == WAITING_TEXT)
@@ -1297,6 +1302,66 @@ def bot_settings_developer_xlsx(call):
 
 def bot_predict(call):
     print('predict')
+
+    #взятие данных по предсказаниям
+    markup = types.InlineKeyboardMarkup()
+    button1 = types.InlineKeyboardButton('CSV', callback_data='bot_predictions_developer_csv')
+    button2 = types.InlineKeyboardButton('XLSX', callback_data='bot_predictions_developer_xlsx')
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+
+    markup.add(button1, button2, button)
+    bot.send_message(call.message.chat.id, text='В каком формате предоставить данные?', reply_markup=markup)
+
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    query = "SELECT * FROM predictions"
+    cursor.execute(query)
+    result = cursor.fetchall()
+
+    conn.commit()
+    conn.close()
+
+def bot_predictions_developer_csv(call):
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    df = pd.read_sql_query("SELECT * FROM predictions", conn)
+    df.to_csv('bd_bot_predictions.csv', index=False)
+
+    # Открываем файл и отправляем его пользователю
+    with open('bd_bot_settings.csv', 'rb') as f:
+        bot.send_document(call.message.chat.id, f, caption="Вот список предсказаний бота")
+        os.remove('bd_bot_settings.csv')
+
+    conn.commit()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup()
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+    markup.add(button)
+    bot.send_message(call.message.chat.id, text='Данные предсоатвлены', reply_markup=markup)
+
+def bot_predictions_developer_xlsx(call):
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    df = pd.read_sql_query("SELECT * FROM predictions", conn)
+    df.to_excel('bd_bot_predictions.xlsx', index=False, engine='openpyxl')
+
+    # Открываем файл и отправляем его пользователю
+    with open('bd_bot_predictions.xlsx', 'rb') as f:
+        bot.send_document(call.message.chat.id, f, caption="Вот список предсказаний бота")
+        os.remove('bd_bot_predictions.xlsx')
+
+    conn.commit()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup()
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+    markup.add(button)
+    bot.send_message(call.message.chat.id, text='Данные предсоатвлены', reply_markup=markup)
+
 
 def model_struct(call):
     #обращение к датасету
