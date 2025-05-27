@@ -10,6 +10,9 @@ from io import BytesIO
 import pandas as pd
 import os
 import sqlite3
+import tensorflow as tf
+from tensorflow.keras.preprocessing.image import load_img, img_to_array
+import numpy as np
 
 #токен для подключения к боту
 token = '7433058915:AAHj5KtDTJ58OoGGUIayfWpDGOG3v0DnfgY'
@@ -19,7 +22,8 @@ bot = telebot.TeleBot(token)
 
 #Словарь и константы для сохранения состояний
 user_states = {}
-WAITING_MENU, START, LOGIN, PASSWORD,PHOTO, WAITING_TEXT, DEV_BASE, WAITING_ID, WAITING_ANSWER, EDIT_LOGIN, EDIT_PASSWORD, WAITING_REVIEW, ADMIN_ADD_USER, ADMIN_USER_EDIT, ADMIN_WRITE_USER = range(15)
+WAITING_MENU, START, LOGIN, PASSWORD, PHOTO, WAITING_TEXT, DEV_BASE, WAITING_ID, WAITING_ANSWER, EDIT_LOGIN, EDIT_PASSWORD, WAITING_REVIEW, ADMIN_ADD_USER, ADMIN_USER_EDIT, ADMIN_WRITE_USER, THC_PHOTO, TWC_PHOTO = range(17)
+PHOTO_MRT = 15
 
 
 #Стартовая часть с проверкой логина и пароля
@@ -201,14 +205,22 @@ def work(message):
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
 
-    # Вызов функции анализа изображений
+    #Вызов общей функции анализа изображений
     if call.data == 'analyze_image':
         analis(call)
+
+    elif call.data == 'thc':
+        user_states[call.message.chat.id] = THC_PHOTO
+        bot.send_message(call.message.chat.id, text='Используется модель THCMax. Загрузите снимок')
+
+    elif call.data == 'twc':
+        user_states[call.message.chat.id] = TWC_PHOTO
+        bot.send_message(call.message.chat.id, text='Используется упрощённаая модель TWCLow. Загрузите снимок')
 
 # Внешние функции для уровней пользователей
 
     #переходы по функциям обычного пользователя
-    if call.data == 'tech_help':
+    elif call.data == 'tech_help':
         user_states[call.message.chat.id] = WAITING_TEXT
         bot.send_message(call.message.chat.id, 'Пожалуйста, введите описание вашей проблемы')
 
@@ -244,7 +256,6 @@ def handle_callback(call):
                                                     'id, его лоигн и пароль, а так же его роль')
 
     elif call.data == 'bot_settings_admin':
-        print('sdkjfh')
         bot_settings_admin(call)
 
     elif call.data == 'review_admin':
@@ -330,21 +341,65 @@ def handle_callback(call):
 #ВЫПОЛНЕНИЕ ВНЕШНИХ ФУНКЦИИ ПО УРОВНЯМ
 #Общая функция для анализа снимков
 def analis(call):
-    bot.send_message(call.message.chat.id, 'Вот твоё изображение')
-    # сделать вызов загрузки нейронной сети
-    print('Функция работает')
     markup = types.InlineKeyboardMarkup()
-    button1 = types.InlineKeyboardButton('Загрузить изображение', callback_data='analyze_image')
+    button1 = types.InlineKeyboardButton('Мощная нейронка', callback_data='thc')
+    button2 = types.InlineKeyboardButton('Слабая нейронка', callback_data='twc')
     button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+    markup.add(button1, button2, button)
+
+    bot.send_message(call.message.chat.id, text='Выберите модель', reply_markup=markup)
+
+@bot.message_handler(content_types=['photo'], func=lambda m: user_states.get(m.chat.id) == THC_PHOTO)
+def thc(message):
+    print('sdkjfh`')
+    photo_list = message.photo
+    largest_photo = photo_list[-1]
+    file_info = bot.get_file(largest_photo.file_id)
+    downloaded_file = bot.download_file(file_info.file_path)
+    with open('mrt.jpg', 'wb') as new_file:
+        new_file.write(downloaded_file)
+    bot.send_message(message.chat.id, text="Фотография успешно сохранена!")
+
+    photo_path = 'mrt.jpg'
+    with open('mrt.jpg', 'rb') as photo:
+        bot.send_photo(message.chat.id, photo=photo)
+    os.remove('mrt.jpg')
 
 
 
-    #повторый вызов функции или выход в меню
-    markup.add(button1, button)
-    bot.send_message(call.message.chat.id, text='Хочешь загрузить сообщение или выйти в меню?', reply_markup=markup)
+@bot.message_handler(content_types=['photo'], func=lambda m: user_states.get(m.chat.id) == TWC_PHOTO)
+def twc(message):
+    try:
+        photo_list = message.photo
+        largest_photo = photo_list[-1]
+        file_info = bot.get_file(largest_photo.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        with open('mrt.jpg', 'wb') as new_file:
+            new_file.write(downloaded_file)
+        bot.send_message(message.chat.id, text="Фотография успешно сохранена!")
 
+        img_path = 'mrt.jpg'
+        img = load_img(img_path, target_size=(150, 150))
+        x = img_to_array(img)
+        x = x / 255.0
+        x = np.expand_dims(x, axis=0)
 
-    # work(call.message)
+        # загружаем модель
+        model = tf.keras.models.load_model('/Users/ilia/brainTumorClassification/my_model1.keras')
+
+        # предсказание
+        preds = model.predict(x)
+        print(preds)
+
+        photo_path = 'mrt.jpg'
+        with open('mrt.jpg', 'rb') as photo:
+            bot.send_photo(message.chat.id, photo=photo)
+        os.remove('mrt.jpg')
+
+        bot.send_message(message.chat.id, text=f'Предсказания модели: {preds}')
+        user_states[message.chat.id] = None
+    except Exception as e:
+        print('e')
 
 
 
