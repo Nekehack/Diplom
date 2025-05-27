@@ -388,10 +388,10 @@ def thc(message):
     #Загрузка основной модели:
 
     class HardDistillationLoss(nn.Module):
-        def __init__(self, teacher: nn.Module):
+        def __init__(self, teacher: nn.Module, class_weights=None):
             super().__init__()
             self.teacher = teacher
-            self.criterion = nn.CrossEntropyLoss()
+            self.criterion = nn.CrossEntropyLoss(weight=class_weights)
 
         def forward(self, inputs: Tensor, outputs: tuple[Tensor, Tensor], labels: Tensor) -> Tensor:
             outputs_cls, outputs_dist = outputs
@@ -413,8 +413,11 @@ def thc(message):
             # Комбинируем потери
             return 0.5 * base_loss + 0.5 * teacher_loss
 
+    from einops import rearrange, reduce, repeat
+    from einops.layers.torch import Rearrange, Reduce
+
     class PatchEmbedding(nn.Module):
-        def __init__(self, in_channels: int = 3, patch_size: int = 16, emb_size: int = 768, img_size: int = 224):
+        def __init__(self, in_channels: int = 3, patch_size: int = 16, emb_size: int = 384, img_size: int = 224):
             super().__init__()
             self.patch_size = patch_size
 
@@ -451,7 +454,7 @@ def thc(message):
             return x
 
     class ClassificationHead(nn.Module):
-        def __init__(self, emb_size: int = 768, n_classes: int = 2):
+        def __init__(self, emb_size: int = 384, n_classes: int = 3):
             super().__init__()
 
             self.head = nn.Linear(emb_size, n_classes)
@@ -469,7 +472,7 @@ def thc(message):
             return x
 
     class MultiHeadAttention(nn.Module):
-        def __init__(self, emb_size: int = 768, num_heads: int = 8, dropout: float = 0):
+        def __init__(self, emb_size: int = 384, num_heads: int = 8, dropout: float = 0):
             super().__init__()
             self.emb_size = emb_size
             self.num_heads = num_heads
@@ -486,13 +489,13 @@ def thc(message):
             energy = torch.einsum('bhqd, bhkd -> bhqk', queries, keys)  # batch, num_heads, query_len, key_len
             if mask is not None:
                 fill_value = torch.finfo(torch.float32).min
-                energy = energy.masked_fill(~mask, fill_value)
+                energy.mask_fill(~mask, fill_value)
 
-            scaling = self.emb_size ** 0.5
-            att = F.softmax(energy / scaling, dim=-1)
+            scaling = self.emb_size ** (1 / 2)
+            att = F.softmax(energy, dim=-1) / scaling
             att = self.att_drop(att)
             # sum up over the third axis
-            out = torch.einsum('bhqk, bhkd -> bhqd', att, values)
+            out = torch.einsum('bhal, bhlv -> bhav ', att, values)
             out = rearrange(out, "b h n d -> b n (h d)")
             out = self.projection(out)
             return out
@@ -519,7 +522,7 @@ def thc(message):
 
     class TransformerEncoderBlock(nn.Sequential):
         def __init__(self,
-                     emb_size: int = 768,
+                     emb_size: int = 384,
                      drop_p: float = 0.,
                      forward_expansion: int = 4,
                      forward_drop_p: float = 0.,
@@ -546,29 +549,43 @@ def thc(message):
         def __init__(self,
                      in_channels: int = 3,
                      patch_size: int = 16,
-                     emb_size: int = 768,
+                     emb_size: int = 384,
                      img_size: int = 224,
                      depth: int = 12,
-                     n_classes: int = 1000,
+                     n_classes: int = 3,
                      **kwargs):
             super().__init__(
                 PatchEmbedding(in_channels, patch_size, emb_size, img_size),
                 TransformerEncoder(depth, emb_size=emb_size, **kwargs),
                 ClassificationHead(emb_size, n_classes))
 
+    from torchvision import datasets, transforms
+    from torch.utils.data import DataLoader
+
+    # Определение преобразований для изображений
     transform = transforms.Compose([
-        transforms.Resize((224, 224)),  # Изменяем размер до 224x224
-        transforms.ToTensor(),  # Преобразуем в тензор
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Нормализация
+        transforms.Resize((224, 224)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(10),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
     # Создание датасета с помощью ImageFolder
-    ds = datasets.ImageFolder(root='Testing', transform=transform)
+    ds = datasets.ImageFolder(root='/Users/ilia/DataSetForDiplom/archive-6/Training', transform=transform)
+
+    # Вычисление весов классов для балансировки
+    labels = [label for _, label in ds]
+    class_sample_count = np.array([np.sum(np.array(labels) == t) for t in np.unique(labels)])
+    weight = 1. / class_sample_count
+    class_weights = torch.tensor(weight, dtype=torch.float)
 
     # Создание DataLoader
-    dl = DataLoader(ds, batch_size=32, shuffle=False)
+    batch_size = 16
+    dl = DataLoader(ds, batch_size=batch_size, shuffle=True)
 
-    print(ds.classes)  # ['tumor', 'no_tumor']
+    print(ds.classes)  # ['tumor', 'no_tumor', 'anomaly']
     print(len(ds))
 
     class GradCAM:
@@ -625,6 +642,7 @@ def thc(message):
             for i, w in enumerate(weights):
                 w = 224
                 cam += w * activations[i]
+                # print('activations[i]: ',activations[i])
 
             cam = np.maximum(cam, 0)
             print('h: ', h, 'w: ', w)
@@ -642,57 +660,139 @@ def thc(message):
         def __call__(self, x, class_idx=None):
             return self.forward(x, class_idx)
 
-    def load_model_for_analysis(model_path: str, device: str = 'cpu'):
+    train_losses = []
+    train_accuracies = []
+    train_f1_scores = []
+    train_auc_scores = []
+
+    # Teacher model (Vision Transformer)
+    teacher = timm.create_model('vit_large_patch16_224', pretrained=True, num_classes=3)
+    teacher.eval()
+
+    student = timm.create_model('deit_small_patch16_224', pretrained=True, num_classes=3)
+
+    # Student model (DeiT)
+    student = DeiT(
+        in_channels=3,
+        patch_size=16,
+        emb_size=384,
+        img_size=224,
+        depth=12,
+        n_classes=3
+    )
+
+    # Проверка, что все параметры student требуют градиентов
+    for param in student.parameters():
+        assert param.requires_grad
+
+    # Оптимизатор
+    optimizer = Adam(student.parameters(), lr=0.0001)
+
+    # Scheduler
+    from torch.optim.lr_scheduler import ReduceLROnPlateau
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, verbose=True)
+
+    # Функция потерь с учетом весов классов
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    criterion = HardDistillationLoss(teacher, class_weights=class_weights.to(device))
+
+    teacher.to(device)
+    student.to(device)
+
+    try:
+        for epoch in range(5):
+            student.train()
+            running_loss = 0.0
+            all_labels, all_preds, all_probs = [], [], []
+            for batch in tqdm(dl, desc=f"Epoch {epoch + 1}/5"):
+                inputs, labels = batch
+                inputs, labels = inputs.to(device), labels.to(device)
+                optimizer.zero_grad()
+                outputs = student(inputs)
+                if isinstance(outputs, tuple):
+                    outputs_cls, outputs_dist = outputs
+                else:
+                    outputs_cls = outputs
+                    outputs_dist = outputs
+                loss = criterion(inputs, (outputs_cls, outputs_dist), labels)
+                loss.backward()
+                optimizer.step()
+                running_loss += loss.item()
+                probs = torch.softmax(outputs_cls, dim=1).detach().cpu().numpy()
+                preds = probs.argmax(axis=1)
+                all_labels.extend(labels.cpu().numpy())
+                all_preds.extend(preds)
+            epoch_loss = running_loss / len(dl)
+            epoch_acc = accuracy_score(all_labels, all_preds)
+            epoch_f1 = f1_score(all_labels, all_preds, average='weighted')
+            class_f1_scores = f1_score(all_labels, all_preds, average=None)
+            train_losses.append(epoch_loss)
+            train_accuracies.append(epoch_acc)
+            train_f1_scores.append(epoch_f1)
+            print(
+                f"F1 по классам: [0: {class_f1_scores[0]:.4f}, 1: {class_f1_scores[1]:.4f}, 2: {class_f1_scores[2]:.4f}]")
+            print(f"Epoch {epoch + 1}/5 | Loss: {epoch_loss:.4f}, Acc: {epoch_acc:.4f}, F1: {epoch_f1:.4f}")
+            scheduler.step(epoch_loss)
+
+    except Exception as e:
+        print("Ошибка:", e)
+
+        def predict_image(model, image_path, transform, class_names, device='cpu'):
+            """
+            Делает предсказание для одного изображения с помощью загруженной модели.
+            :param model: загруженная модель
+            :param image_path: путь к изображению
+            :param transform: torchvision.transforms для обработки изображения
+            :param class_names: список имён классов (например, ds.classes)
+            :param device: 'cpu' или 'cuda'
+            :return: имя класса и вероятность
+            """
+            model.eval()
+            image = Image.open(image_path).convert('RGB')
+            input_tensor = transform(image).unsqueeze(0).to(device)  # добавляем batch dimension
+
+            with torch.no_grad():
+                output = model(input_tensor)
+                if isinstance(output, tuple):  # если модель возвращает кортеж (как в DeiT)
+                    output = output[0]
+                probs = torch.softmax(output, dim=1)
+                pred_idx = probs.argmax(dim=1).item()
+                pred_class = class_names[pred_idx]
+                pred_prob = probs[0, pred_idx].item()
+            return pred_class, pred_prob
+
+        # Пример использования:
+        # model = load_model_for_analysis('/Users/ilia/DeiT/DeiT.pth')
+        # class_name, prob = predict_image(model, 'path/to/image.jpg', transform, ds.classes)
+        # print(f'Класс: {class_name}, вероятность: {prob:.2f}')
+
+        # 1. Загружаем модель
+        model = load_model_for_analysis('/Users/ilia/DeiT/DeiT.pth', device='cpu')
+
+        # 2. Делаем предсказание
+        class_name, prob = predict_image(model, 'Testing/tumor/пример.jpg', transform, ds.classes)
+        print(f'Класс: {class_name}, вероятность: {prob:.2f}')
+
+    def load_model_for_analysis(model_path, device='cpu'):
         """
-        Загружает сохранённую модель PyTorch для анализа.
-        :param model_path: путь к .pth файлу
-        :param device: 'cpu' или 'cuda' (по умолчанию 'cpu')
-        :return: модель
+        Загружает модель DeiT с сохранёнными весами.
+        :param model_path: путь к файлу с весами (например, 'DeiT.pth')
+        :param device: 'cpu' или 'cuda'
+        :return: модель DeiT, готовая к инференсу
         """
-        model = torch.load(model_path, map_location=torch.device(device))
+        model = DeiT(
+            in_channels=3,
+            patch_size=16,
+            emb_size=384,
+            img_size=224,
+            depth=12,
+            n_classes=3
+        )
+        state_dict = torch.load(model_path, map_location=device)
+        model.load_state_dict(state_dict)
+        model.to(device)
         model.eval()
         return model
-
-    # Пример использования:
-    # model = load_model_for_analysis('DeiT.pth', device='cpu')
-
-    def predict_image(model, image_path, transform, class_names, device='cpu'):
-        """
-        Делает предсказание для одного изображения с помощью загруженной модели.
-        :param model: загруженная модель
-        :param image_path: путь к изображению
-        :param transform: torchvision.transforms для обработки изображения
-        :param class_names: список имён классов (например, ds.classes)
-        :param device: 'cpu' или 'cuda'
-        :return: имя класса и вероятность
-        """
-        model.eval()
-        image = Image.open(image_path).convert('RGB')
-        input_tensor = transform(image).unsqueeze(0).to(device)  # добавляем batch dimension
-
-        with torch.no_grad():
-            output = model(input_tensor)
-            if isinstance(output, tuple):  # если модель возвращает кортеж (как в DeiT)
-                output = output[0]
-            probs = torch.softmax(output, dim=1)
-            pred_idx = probs.argmax(dim=1).item()
-            pred_class = class_names[pred_idx]
-            pred_prob = probs[0, pred_idx].item()
-        return pred_class, pred_prob
-
-    # Пример использования:
-    # model = load_model_for_analysis('/Users/ilia/DeiT/DeiT.pth')
-    # class_name, prob = predict_image(model, 'path/to/image.jpg', transform, ds.classes)
-    # print(f'Класс: {class_name}, вероятность: {prob:.2f}')
-
-    # 1. Загружаем модель
-    model = load_model_for_analysis('/Users/ilia/DeiT/DeiT.pth', device='cpu')
-
-    # 2. Делаем предсказание
-    class_name, prob = predict_image(model, 'Testing/tumor/пример.jpg', transform, ds.classes)
-    print(f'Класс: {class_name}, вероятность: {prob:.2f}')
-
-
 
 
     photo_path = 'mrt.jpg'
