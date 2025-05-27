@@ -1255,7 +1255,27 @@ def bot_predict(call):
     print('predict')
 
 def model_struct(call):
-    print('ыекгс')
+
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    query = 'SELECT * FROM model_structure'
+    cursor.execute(query)
+
+    result = cursor.fetchall()
+
+    bot.send_message(call.message.chat.id, text=f'Классы используемые в основной модели:')
+    for row in result:
+        bot.send_message(call.message.chat.id, text=f'Класс {result[1]}:\n'
+                                                    f'{result[2]}')
+
+
+    work(call.message)
+
+
+    conn.commit()
+    conn.close()
+
 
 
 #функция обработки запроса пользователя
