@@ -1,18 +1,27 @@
 import telebot
 from telebot import types
-import torchvision
-import torch
-from torchvision import transforms
+
+import os
 
 from PIL import Image
 from io import BytesIO
 
 import pandas as pd
-import os
+
 import sqlite3
 import tensorflow as tf
 from tensorflow.keras.preprocessing.image import load_img, img_to_array
 import numpy as np
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch import Tensor
+from torch.utils.data import DataLoader
+from torchvision import transforms, datasets
+from einops import rearrange, repeat
+from einops.layers.torch import Rearrange
+import cv2
 
 #токен для подключения к боту
 token = '7433058915:AAHj5KtDTJ58OoGGUIayfWpDGOG3v0DnfgY'
@@ -360,10 +369,322 @@ def thc(message):
         new_file.write(downloaded_file)
     bot.send_message(message.chat.id, text="Фотография успешно сохранена!")
 
+    #Загрузка основной модели:
+
+    class HardDistillationLoss(nn.Module):
+        def __init__(self, teacher: nn.Module):
+            super().__init__()
+            self.teacher = teacher
+            self.criterion = nn.CrossEntropyLoss()
+
+        def forward(self, inputs: Tensor, outputs: tuple[Tensor, Tensor], labels: Tensor) -> Tensor:
+            outputs_cls, outputs_dist = outputs
+
+            # Базовая потеря (CLS)
+            base_loss = self.criterion(outputs_cls, labels)
+
+            # Вычисляем предсказания учителя
+            with torch.no_grad():
+                teacher_outputs = self.teacher(inputs)
+
+            # Ограничиваем выходы учителя двумя классами
+            teacher_logits = teacher_outputs[:, :2]  # Берем только первые два класса
+            teacher_labels = torch.argmax(teacher_logits, dim=1)
+
+            # Потеря для DIST
+            teacher_loss = self.criterion(outputs_dist, teacher_labels)
+
+            # Комбинируем потери
+            return 0.5 * base_loss + 0.5 * teacher_loss
+
+    class PatchEmbedding(nn.Module):
+        def __init__(self, in_channels: int = 3, patch_size: int = 16, emb_size: int = 768, img_size: int = 224):
+            super().__init__()
+            self.patch_size = patch_size
+
+            # Проекция патчей
+            self.projection = nn.Sequential(
+                nn.Conv2d(in_channels, emb_size, kernel_size=patch_size, stride=patch_size),
+                Rearrange('b e (h) (w) -> b (h w) e'),
+            )
+
+            # Токены CLS и DIST
+            self.cls_token = nn.Parameter(torch.randn(1, 1, emb_size))
+            self.dist_token = nn.Parameter(torch.randn(1, 1, emb_size))  # Убедитесь, что это определено
+
+            # Позиционные эмбеддинги
+            num_patches = (img_size // patch_size) ** 2
+            self.positions = nn.Parameter(torch.randn(num_patches + 2, emb_size))  # +2 для cls_token и dist_token
+
+        def forward(self, x: Tensor) -> Tensor:
+            b, _, _, _ = x.shape
+
+            # Проекция патчей
+            x = self.projection(x)
+
+            # Создание токенов CLS и DIST
+            cls_tokens = repeat(self.cls_token, '() n e -> b n e', b=b)
+            dist_tokens = repeat(self.dist_token, '() n e -> b n e', b=b)
+
+            # Добавление токенов CLS и DIST к входным данным
+            x = torch.cat([cls_tokens, dist_tokens, x], dim=1)
+
+            # Добавление позиционных эмбеддингов
+            x += self.positions
+
+            return x
+
+    class ClassificationHead(nn.Module):
+        def __init__(self, emb_size: int = 768, n_classes: int = 2):
+            super().__init__()
+
+            self.head = nn.Linear(emb_size, n_classes)
+            self.dist_head = nn.Linear(emb_size, n_classes)
+
+        def forward(self, x: Tensor) -> Tensor:
+            x, x_dist = x[:, 0], x[:, 1]
+            x_head = self.head(x)
+            x_dist_head = self.dist_head(x_dist)
+
+            if self.training:
+                x = x_head, x_dist_head  # Возвращает кортеж
+            else:
+                x = (x_head + x_dist_head) / 2  # Возвращает тензор
+            return x
+
+    class MultiHeadAttention(nn.Module):
+        def __init__(self, emb_size: int = 768, num_heads: int = 8, dropout: float = 0):
+            super().__init__()
+            self.emb_size = emb_size
+            self.num_heads = num_heads
+            # fuse the queries, keys and values in one matrix
+            self.qkv = nn.Linear(emb_size, emb_size * 3)
+            self.att_drop = nn.Dropout(dropout)
+            self.projection = nn.Linear(emb_size, emb_size)
+
+        def forward(self, x: Tensor, mask: Tensor = None) -> Tensor:
+            # split keys, queries and values in num_heads
+            qkv = rearrange(self.qkv(x), "b n (h d qkv) -> (qkv) b h n d", h=self.num_heads, qkv=3)
+            queries, keys, values = qkv[0], qkv[1], qkv[2]
+            # sum up over the last axis
+            energy = torch.einsum('bhqd, bhkd -> bhqk', queries, keys)  # batch, num_heads, query_len, key_len
+            if mask is not None:
+                fill_value = torch.finfo(torch.float32).min
+                energy = energy.masked_fill(~mask, fill_value)
+
+            scaling = self.emb_size ** 0.5
+            att = F.softmax(energy / scaling, dim=-1)
+            att = self.att_drop(att)
+            # sum up over the third axis
+            out = torch.einsum('bhqk, bhkd -> bhqd', att, values)
+            out = rearrange(out, "b h n d -> b n (h d)")
+            out = self.projection(out)
+            return out
+
+    class ResidualAdd(nn.Module):
+        def __init__(self, fn):
+            super().__init__()
+            self.fn = fn
+
+        def forward(self, x, **kwargs):
+            res = x
+            x = self.fn(x, **kwargs)
+            x += res
+            return x
+
+    class FeedForwardBlock(nn.Sequential):
+        def __init__(self, emb_size: int, expansion: int = 4, drop_p: float = 0.):
+            super().__init__(
+                nn.Linear(emb_size, expansion * emb_size),
+                nn.GELU(),
+                nn.Dropout(drop_p),
+                nn.Linear(expansion * emb_size, emb_size),
+            )
+
+    class TransformerEncoderBlock(nn.Sequential):
+        def __init__(self,
+                     emb_size: int = 768,
+                     drop_p: float = 0.,
+                     forward_expansion: int = 4,
+                     forward_drop_p: float = 0.,
+                     **kwargs):
+            super().__init__(
+                ResidualAdd(nn.Sequential(
+                    nn.LayerNorm(emb_size),
+                    MultiHeadAttention(emb_size, **kwargs),
+                    nn.Dropout(drop_p)
+                )),
+                ResidualAdd(nn.Sequential(
+                    nn.LayerNorm(emb_size),
+                    FeedForwardBlock(
+                        emb_size, expansion=forward_expansion, drop_p=forward_drop_p),
+                    nn.Dropout(drop_p)
+                )
+                ))
+
+    class TransformerEncoder(nn.Sequential):
+        def __init__(self, depth: int = 12, **kwargs):
+            super().__init__(*[TransformerEncoderBlock(**kwargs) for _ in range(depth)])
+
+    class DeiT(nn.Sequential):
+        def __init__(self,
+                     in_channels: int = 3,
+                     patch_size: int = 16,
+                     emb_size: int = 768,
+                     img_size: int = 224,
+                     depth: int = 12,
+                     n_classes: int = 1000,
+                     **kwargs):
+            super().__init__(
+                PatchEmbedding(in_channels, patch_size, emb_size, img_size),
+                TransformerEncoder(depth, emb_size=emb_size, **kwargs),
+                ClassificationHead(emb_size, n_classes))
+
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),  # Изменяем размер до 224x224
+        transforms.ToTensor(),  # Преобразуем в тензор
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Нормализация
+    ])
+
+    # Создание датасета с помощью ImageFolder
+    ds = datasets.ImageFolder(root='Testing', transform=transform)
+
+    # Создание DataLoader
+    dl = DataLoader(ds, batch_size=32, shuffle=False)
+
+    print(ds.classes)  # ['tumor', 'no_tumor']
+    print(len(ds))
+
+    class GradCAM:
+        def __init__(self, model, target_layer):
+            self.model = model
+            self.target_layer = target_layer
+            self.gradients = None
+            self.activations = None
+
+            # Hook для сохранения градиентов и активаций
+            target_layer.register_forward_hook(self.save_activations)
+            target_layer.register_backward_hook(self.save_gradients)
+
+        def save_activations(self, module, input, output):
+            self.activations = output.detach()
+
+        def save_gradients(self, module, grad_input, grad_output):
+            self.gradients = grad_output[0].detach()
+
+        def forward(self, x, class_idx=None):
+            # Сохраняем исходные размеры изображения
+            original_size = x.shape[-2:]  # (height, width)
+            h, w = original_size
+            print('h: ', h, 'w: ', w)
+
+            # Проверка, что размеры корректны
+            if h <= 0 or w <= 0:
+                raise ValueError(f"Некорректные размеры изображения: height={h}, width={w}")
+
+            # Прямой проход через модель
+            logits = self.model(x)
+            if isinstance(logits, tuple):
+                logits = logits[0]  # Берём первый выход (CLS)
+            self.model.zero_grad()
+
+            if class_idx is None:
+                class_idx = logits.argmax(dim=1).item()
+
+            one_hot = torch.zeros_like(logits)
+            one_hot[0][class_idx] = 1
+            one_hot.requires_grad_(True)
+
+            # Вычисляем градиенты относительно one_hot
+            output = (one_hot * logits).sum()
+            output.backward(retain_graph=True)
+
+            gradients = self.gradients.cpu().numpy()[0]
+            activations = self.activations.cpu().numpy()[0]
+
+            weights = np.mean(gradients, axis=(1, 2))
+            print('h: ', h, 'w: ', w)
+            cam = np.zeros(activations.shape[1:], dtype=np.float32)
+
+            for i, w in enumerate(weights):
+                w = 224
+                cam += w * activations[i]
+
+            cam = np.maximum(cam, 0)
+            print('h: ', h, 'w: ', w)
+
+            # Проверка размеров перед изменением размера
+            if int(w) <= 0 or int(h) <= 0:
+                raise ValueError(f"Некорректные размеры для изменения размера: w={w}, h={h}")
+            # w=224
+            cam = cv2.resize(cam, (int(w), int(h)))  # Преобразуем w и h в целые числа
+
+            cam = cam - np.min(cam)
+            cam = cam / np.max(cam)
+            return cam
+
+        def __call__(self, x, class_idx=None):
+            return self.forward(x, class_idx)
+
+    def load_model_for_analysis(model_path: str, device: str = 'cpu'):
+        """
+        Загружает сохранённую модель PyTorch для анализа.
+        :param model_path: путь к .pth файлу
+        :param device: 'cpu' или 'cuda' (по умолчанию 'cpu')
+        :return: модель
+        """
+        model = torch.load(model_path, map_location=torch.device(device))
+        model.eval()
+        return model
+
+    # Пример использования:
+    # model = load_model_for_analysis('DeiT.pth', device='cpu')
+
+    def predict_image(model, image_path, transform, class_names, device='cpu'):
+        """
+        Делает предсказание для одного изображения с помощью загруженной модели.
+        :param model: загруженная модель
+        :param image_path: путь к изображению
+        :param transform: torchvision.transforms для обработки изображения
+        :param class_names: список имён классов (например, ds.classes)
+        :param device: 'cpu' или 'cuda'
+        :return: имя класса и вероятность
+        """
+        model.eval()
+        image = Image.open(image_path).convert('RGB')
+        input_tensor = transform(image).unsqueeze(0).to(device)  # добавляем batch dimension
+
+        with torch.no_grad():
+            output = model(input_tensor)
+            if isinstance(output, tuple):  # если модель возвращает кортеж (как в DeiT)
+                output = output[0]
+            probs = torch.softmax(output, dim=1)
+            pred_idx = probs.argmax(dim=1).item()
+            pred_class = class_names[pred_idx]
+            pred_prob = probs[0, pred_idx].item()
+        return pred_class, pred_prob
+
+    # Пример использования:
+    # model = load_model_for_analysis('/Users/ilia/DeiT/DeiT.pth')
+    # class_name, prob = predict_image(model, 'path/to/image.jpg', transform, ds.classes)
+    # print(f'Класс: {class_name}, вероятность: {prob:.2f}')
+
+    # 1. Загружаем модель
+    model = load_model_for_analysis('/Users/ilia/DeiT/DeiT.pth', device='cpu')
+
+    # 2. Делаем предсказание
+    class_name, prob = predict_image(model, 'Testing/tumor/пример.jpg', transform, ds.classes)
+    print(f'Класс: {class_name}, вероятность: {prob:.2f}')
+
+
+
+
     photo_path = 'mrt.jpg'
     with open('mrt.jpg', 'rb') as photo:
         bot.send_photo(message.chat.id, photo=photo)
     os.remove('mrt.jpg')
+
+
 
 
 
