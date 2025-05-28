@@ -17,6 +17,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+import timm
 from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 from einops import rearrange, repeat
@@ -335,12 +336,19 @@ def handle_callback(call):
     elif call.data == 'admin_review_xlsx':
         admin_review_csv(call)
 
-    # взятие файлов из таблицы вопросы
+    # взятие данных из таблицы вопросы
     elif call.data == 'admin_question_csv':
         admin_question_csv(call)
 
     elif call.data == 'admin_question_xlsx':
         admin_question_xlsx(call)
+
+    #взятие данных из таблицы активность пользователей
+    elif call.data == 'admin_user_activity_csv':
+        admin_user_activity_csv(call)
+
+    elif call.data == 'admin_user_activity_xlsx':
+        admin_user_activity_xlsx(call)
 
     #отправка сообщения пользователю
     elif call.data == 'send_admin_message':
@@ -1080,6 +1088,53 @@ def send_amind_users_xlsx(call):
 
 def activity(call):
     print('activity')
+
+    markup = types.InlineKeyboardMarkup()
+    button1 = types.InlineKeyboardButton('CSV', callback_data='admin_user_activity_csv')
+    button2 = types.InlineKeyboardButton('XLSX', callback_data='admin_user_activity_xlsx')
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+
+    markup.add(button1, button2, button)
+    bot.send_message(call.message.chat.id, text='В каком формате предоставить данные?', reply_markup=markup)
+
+def admin_user_activity_csv(call):
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    df = pd.read_sql_query("SELECT * FROM user_activity", conn)
+    df.to_csv('bd_user_activity.csv', index=False)
+
+    # Открываем файл и отправляем его пользователю
+    with open('bd_user_activity.csv', 'rb') as f:
+        bot.send_document(call.message.chat.id, f, caption="Вот список пользователей")
+        os.remove('bd_user_activity.csv')
+
+    conn.commit()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup()
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+    markup.add(button)
+    bot.send_message(call.message.chat.id, text='Данные предсоатвлены', reply_markup=markup)
+
+def admin_user_activity_xlsx(call):
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    df = pd.read_sql_query("SELECT * FROM user_activity", conn)
+    df.to_excel('bd_users.xlsx', index=False, engine='openpyxl')
+
+    with open('bd_user_activity.xlsx', 'rb') as f:
+        bot.send_document(call.message.chat.id, f, caption="Вот список пользователей")
+        os.remove('bd_user_activity.xlsx')
+
+    conn.commit()
+    conn.close()
+
+    markup = types.InlineKeyboardMarkup()
+    button = types.InlineKeyboardButton("Выход в меню", callback_data='exit')
+    markup.add(button)
+    bot.send_message(call.message.chat.id, text='Данные предсоатвлены', reply_markup=markup)
 
 @bot.message_handler(func=lambda message: user_states.get(message.chat.id) == ADMIN_ADD_USER)
 def add_user(message):
