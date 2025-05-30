@@ -219,10 +219,11 @@ def handle_callback(call):
     if call.data == 'analyze_image':
         analis(call)
 
+    #обращение к основной модели
     elif call.data == 'thc':
         user_states[call.message.chat.id] = THC_PHOTO
         bot.send_message(call.message.chat.id, text='Используется модель THCMax. Загрузите снимок')
-
+    # обращение к дополнительной
     elif call.data == 'twc':
         user_states[call.message.chat.id] = TWC_PHOTO
         bot.send_message(call.message.chat.id, text='Используется упрощённаая модель TWCLow. Загрузите снимок')
@@ -382,6 +383,7 @@ def analis(call):
 
     bot.send_message(call.message.chat.id, text='Выберите модель', reply_markup=markup)
 
+#загрузка изображения в модель THC(ThreeClasses)
 @bot.message_handler(content_types=['photo'], func=lambda m: user_states.get(m.chat.id) == THC_PHOTO)
 def thc(message):
     print('sdkjfh`')
@@ -394,35 +396,6 @@ def thc(message):
     bot.send_message(message.chat.id, text="Фотография успешно сохранена!")
 
     #Загрузка основной модели:
-
-    class HardDistillationLoss(nn.Module):
-        def __init__(self, teacher: nn.Module, class_weights=None):
-            super().__init__()
-            self.teacher = teacher
-            self.criterion = nn.CrossEntropyLoss(weight=class_weights)
-
-        def forward(self, inputs: Tensor, outputs: tuple[Tensor, Tensor], labels: Tensor) -> Tensor:
-            outputs_cls, outputs_dist = outputs
-
-            # Базовая потеря (CLS)
-            base_loss = self.criterion(outputs_cls, labels)
-
-            # Вычисляем предсказания учителя
-            with torch.no_grad():
-                teacher_outputs = self.teacher(inputs)
-
-            # Ограничиваем выходы учителя двумя классами
-            teacher_logits = teacher_outputs[:, :2]  # Берем только первые два класса
-            teacher_labels = torch.argmax(teacher_logits, dim=1)
-
-            # Потеря для DIST
-            teacher_loss = self.criterion(outputs_dist, teacher_labels)
-
-            # Комбинируем потери
-            return 0.5 * base_loss + 0.5 * teacher_loss
-
-    from einops import rearrange, reduce, repeat
-    from einops.layers.torch import Rearrange, Reduce
 
     class PatchEmbedding(nn.Module):
         def __init__(self, in_channels: int = 3, patch_size: int = 16, emb_size: int = 384, img_size: int = 224):
@@ -445,7 +418,6 @@ def thc(message):
 
         def forward(self, x: Tensor) -> Tensor:
             b, _, _, _ = x.shape
-
             # Проекция патчей
             x = self.projection(x)
 
@@ -459,24 +431,6 @@ def thc(message):
             # Добавление позиционных эмбеддингов
             x += self.positions
 
-            return x
-
-    class ClassificationHead(nn.Module):
-        def __init__(self, emb_size: int = 384, n_classes: int = 3):
-            super().__init__()
-
-            self.head = nn.Linear(emb_size, n_classes)
-            self.dist_head = nn.Linear(emb_size, n_classes)
-
-        def forward(self, x: Tensor) -> Tensor:
-            x, x_dist = x[:, 0], x[:, 1]
-            x_head = self.head(x)
-            x_dist_head = self.dist_head(x_dist)
-
-            if self.training:
-                x = x_head, x_dist_head  # Возвращает кортеж
-            else:
-                x = (x_head + x_dist_head) / 2  # Возвращает тензор
             return x
 
     class MultiHeadAttention(nn.Module):
@@ -553,6 +507,24 @@ def thc(message):
         def __init__(self, depth: int = 12, **kwargs):
             super().__init__(*[TransformerEncoderBlock(**kwargs) for _ in range(depth)])
 
+    class ClassificationHead(nn.Module):
+        def __init__(self, emb_size: int = 384, n_classes: int = 3):
+            super().__init__()
+
+            self.head = nn.Linear(emb_size, n_classes)
+            self.dist_head = nn.Linear(emb_size, n_classes)
+
+        def forward(self, x: Tensor) -> Tensor:
+            x, x_dist = x[:, 0], x[:, 1]
+            x_head = self.head(x)
+            x_dist_head = self.dist_head(x_dist)
+
+            if self.training:
+                x = x_head, x_dist_head  # Возвращает кортеж
+            else:
+                x = (x_head + x_dist_head) / 2  # Возвращает тензор
+            return x
+
     class DeiT(nn.Sequential):
         def __init__(self,
                      in_channels: int = 3,
@@ -560,253 +532,80 @@ def thc(message):
                      emb_size: int = 384,
                      img_size: int = 224,
                      depth: int = 12,
-                     n_classes: int = 3,
+                     n_classes: int = 2,
                      **kwargs):
             super().__init__(
                 PatchEmbedding(in_channels, patch_size, emb_size, img_size),
                 TransformerEncoder(depth, emb_size=emb_size, **kwargs),
                 ClassificationHead(emb_size, n_classes))
 
-    from torchvision import datasets, transforms
-    from torch.utils.data import DataLoader
 
-    # Определение преобразований для изображений
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(10),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-
-    # Создание датасета с помощью ImageFolder
-    ds = datasets.ImageFolder(root='/Users/ilia/DataSetForDiplom/archive-6/Training', transform=transform)
-
-    # Вычисление весов классов для балансировки
-    labels = [label for _, label in ds]
-    class_sample_count = np.array([np.sum(np.array(labels) == t) for t in np.unique(labels)])
-    weight = 1. / class_sample_count
-    class_weights = torch.tensor(weight, dtype=torch.float)
-
-    # Создание DataLoader
-    batch_size = 16
-    dl = DataLoader(ds, batch_size=batch_size, shuffle=True)
-
-    print(ds.classes)  # ['tumor', 'no_tumor', 'anomaly']
-    print(len(ds))
-
-    class GradCAM:
-        def __init__(self, model, target_layer):
-            self.model = model
-            self.target_layer = target_layer
-            self.gradients = None
-            self.activations = None
-
-            # Hook для сохранения градиентов и активаций
-            target_layer.register_forward_hook(self.save_activations)
-            target_layer.register_backward_hook(self.save_gradients)
-
-        def save_activations(self, module, input, output):
-            self.activations = output.detach()
-
-        def save_gradients(self, module, grad_input, grad_output):
-            self.gradients = grad_output[0].detach()
-
-        def forward(self, x, class_idx=None):
-            # Сохраняем исходные размеры изображения
-            original_size = x.shape[-2:]  # (height, width)
-            h, w = original_size
-            print('h: ', h, 'w: ', w)
-
-            # Проверка, что размеры корректны
-            if h <= 0 or w <= 0:
-                raise ValueError(f"Некорректные размеры изображения: height={h}, width={w}")
-
-            # Прямой проход через модель
-            logits = self.model(x)
-            if isinstance(logits, tuple):
-                logits = logits[0]  # Берём первый выход (CLS)
-            self.model.zero_grad()
-
-            if class_idx is None:
-                class_idx = logits.argmax(dim=1).item()
-
-            one_hot = torch.zeros_like(logits)
-            one_hot[0][class_idx] = 1
-            one_hot.requires_grad_(True)
-
-            # Вычисляем градиенты относительно one_hot
-            output = (one_hot * logits).sum()
-            output.backward(retain_graph=True)
-
-            gradients = self.gradients.cpu().numpy()[0]
-            activations = self.activations.cpu().numpy()[0]
-
-            weights = np.mean(gradients, axis=(1, 2))
-            print('h: ', h, 'w: ', w)
-            cam = np.zeros(activations.shape[1:], dtype=np.float32)
-
-            for i, w in enumerate(weights):
-                w = 224
-                cam += w * activations[i]
-                # print('activations[i]: ',activations[i])
-
-            cam = np.maximum(cam, 0)
-            print('h: ', h, 'w: ', w)
-
-            # Проверка размеров перед изменением размера
-            if int(w) <= 0 or int(h) <= 0:
-                raise ValueError(f"Некорректные размеры для изменения размера: w={w}, h={h}")
-            # w=224
-            cam = cv2.resize(cam, (int(w), int(h)))  # Преобразуем w и h в целые числа
-
-            cam = cam - np.min(cam)
-            cam = cam / np.max(cam)
-            return cam
-
-        def __call__(self, x, class_idx=None):
-            return self.forward(x, class_idx)
-
-    train_losses = []
-    train_accuracies = []
-    train_f1_scores = []
-    train_auc_scores = []
-
-    # Teacher model (Vision Transformer)
-    teacher = timm.create_model('vit_large_patch16_224', pretrained=True, num_classes=3)
-    teacher.eval()
-
-    student = timm.create_model('deit_small_patch16_224', pretrained=True, num_classes=3)
-
-    # Student model (DeiT)
-    student = DeiT(
+    model = DeiT(
         in_channels=3,
         patch_size=16,
         emb_size=384,
         img_size=224,
         depth=12,
-        n_classes=3
+        n_classes=2
     )
 
-    # Проверка, что все параметры student требуют градиентов
-    for param in student.parameters():
-        assert param.requires_grad
+    #загрузи веса
+    model.load_state_dict(torch.load('/Users/ilia/DeiT/deit_binary_model.pth', map_location='cpu'))
+    model.eval()
 
-    # Оптимизатор
-    optimizer = Adam(student.parameters(), lr=0.0001)
+    #преобразования (должны совпадать с обучением!)
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.Grayscale(num_output_channels=3),  # если было при обучении!
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+    ])
 
-    # Scheduler
-    from torch.optim.lr_scheduler import ReduceLROnPlateau
-    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, verbose=True)
+    #классы (два класса, порядок как в обучении)
+    class_names = ['tumor', 'no_tumor']
 
-    # Функция потерь с учетом весов классов
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    criterion = HardDistillationLoss(teacher, class_weights=class_weights.to(device))
-
-    teacher.to(device)
-    student.to(device)
-
-    try:
-        for epoch in range(5):
-            student.train()
-            running_loss = 0.0
-            all_labels, all_preds, all_probs = [], [], []
-            for batch in tqdm(dl, desc=f"Epoch {epoch + 1}/5"):
-                inputs, labels = batch
-                inputs, labels = inputs.to(device), labels.to(device)
-                optimizer.zero_grad()
-                outputs = student(inputs)
-                if isinstance(outputs, tuple):
-                    outputs_cls, outputs_dist = outputs
-                else:
-                    outputs_cls = outputs
-                    outputs_dist = outputs
-                loss = criterion(inputs, (outputs_cls, outputs_dist), labels)
-                loss.backward()
-                optimizer.step()
-                running_loss += loss.item()
-                probs = torch.softmax(outputs_cls, dim=1).detach().cpu().numpy()
-                preds = probs.argmax(axis=1)
-                all_labels.extend(labels.cpu().numpy())
-                all_preds.extend(preds)
-            epoch_loss = running_loss / len(dl)
-            epoch_acc = accuracy_score(all_labels, all_preds)
-            epoch_f1 = f1_score(all_labels, all_preds, average='weighted')
-            class_f1_scores = f1_score(all_labels, all_preds, average=None)
-            train_losses.append(epoch_loss)
-            train_accuracies.append(epoch_acc)
-            train_f1_scores.append(epoch_f1)
-            print(
-                f"F1 по классам: [0: {class_f1_scores[0]:.4f}, 1: {class_f1_scores[1]:.4f}, 2: {class_f1_scores[2]:.4f}]")
-            print(f"Epoch {epoch + 1}/5 | Loss: {epoch_loss:.4f}, Acc: {epoch_acc:.4f}, F1: {epoch_f1:.4f}")
-            scheduler.step(epoch_loss)
-
-    except Exception as e:
-        print("Ошибка:", e)
-
-        def predict_image(model, image_path, transform, class_names, device='cpu'):
-            """
-            Делает предсказание для одного изображения с помощью загруженной модели.
-            :param model: загруженная модель
-            :param image_path: путь к изображению
-            :param transform: torchvision.transforms для обработки изображения
-            :param class_names: список имён классов (например, ds.classes)
-            :param device: 'cpu' или 'cuda'
-            :return: имя класса и вероятность
-            """
-            model.eval()
-            image = Image.open(image_path).convert('RGB')
-            input_tensor = transform(image).unsqueeze(0).to(device)  # добавляем batch dimension
-
-            with torch.no_grad():
-                output = model(input_tensor)
-                if isinstance(output, tuple):  # если модель возвращает кортеж (как в DeiT)
-                    output = output[0]
-                probs = torch.softmax(output, dim=1)
-                pred_idx = probs.argmax(dim=1).item()
-                pred_class = class_names[pred_idx]
-                pred_prob = probs[0, pred_idx].item()
-            return pred_class, pred_prob
-
-        # Пример использования:
-        # model = load_model_for_analysis('/Users/ilia/DeiT/DeiT.pth')
-        # class_name, prob = predict_image(model, 'path/to/image.jpg', transform, ds.classes)
-        # print(f'Класс: {class_name}, вероятность: {prob:.2f}')
-
-        # 1. Загружаем модель
-        model = load_model_for_analysis('/Users/ilia/DeiT/DeiT.pth', device='cpu')
-
-        # 2. Делаем предсказание
-        class_name, prob = predict_image(model, 'Testing/tumor/пример.jpg', transform, ds.classes)
-        print(f'Класс: {class_name}, вероятность: {prob:.2f}')
-
-    def load_model_for_analysis(model_path, device='cpu'):
-        """
-        Загружает модель DeiT с сохранёнными весами.
-        :param model_path: путь к файлу с весами (например, 'DeiT.pth')
-        :param device: 'cpu' или 'cuda'
-        :return: модель DeiT, готовая к инференсу
-        """
-        model = DeiT(
-            in_channels=3,
-            patch_size=16,
-            emb_size=384,
-            img_size=224,
-            depth=12,
-            n_classes=3
-        )
-        state_dict = torch.load(model_path, map_location=device)
-        model.load_state_dict(state_dict)
-        model.to(device)
+    #функция предсказания с мета-моделью
+    def predict_with_anomaly_check(model, image_tensor, class_names, threshold=0.7):
         model.eval()
-        return model
+        with torch.no_grad():
+            output = model(image_tensor)
+            if isinstance(output, tuple):
+                output = output[0]  # Берём CLS-токен
+            probs = torch.softmax(output, dim=1)
+            max_prob, pred_idx = probs.max(dim=1)
+        predicted_class = class_names[pred_idx.item()]
+        confidence = max_prob.item()
+        if confidence < threshold:
+            return "аномальное", confidence
+        else:
+            return predicted_class, confidence
 
+    #загрузка изображения
+    image_path = 'mrt.jpg'
+    # image_path = '/Users/ilia/brainTumorClassification/archive-3/Brain Tumor Data Set/Brain Tumor Data Set/Brain Tumor/Cancer (1427).jpg'
+    image = Image.open(image_path).convert('RGB')
+    input_tensor = transform(image).unsqueeze(0)  # batch dimension
+
+    #предсказание
+    predicted_class, confidence = predict_with_anomaly_check(model, input_tensor, class_names, threshold=0.3)
+    print(f"Уверенность: {confidence:.2f}")
+
+    #ответ пользователю в зависимости от уверенности модели
+    if confidence >= 0.8:
+        bot.send_message(message.chat.id, text='Представленное изображение не содержит опухоли, всё впорядке')
+
+    elif confidence > 0.7 and confidence < 0.8:
+        bot.send_message(message.chat.id, text='На изображении видная опухоль, пожалуйста, обратитесь к врачу за мдицинской помощью')
+
+    elif confidence < 0.6:
+        bot.send_message(message.chat.id,text='Выявлена аномалия, пожалуйста, обратитесь к специалисту за дополнительной помощью')
 
     photo_path = 'mrt.jpg'
     with open('mrt.jpg', 'rb') as photo:
         bot.send_photo(message.chat.id, photo=photo)
     os.remove('mrt.jpg')
+
+    work(message)
 
 
 
