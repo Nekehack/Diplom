@@ -593,23 +593,38 @@ def thc(message):
     #ответ пользователю в зависимости от уверенности модели
     if confidence >= 0.8:
         bot.send_message(message.chat.id, text='Представленное изображение не содержит опухоли, всё впорядке')
+        answer = 'Представленное изображение не содержит опухоли, всё впорядке'
 
     elif confidence > 0.7 and confidence < 0.8:
-        bot.send_message(message.chat.id, text='На изображении видная опухоль, пожалуйста, обратитесь к врачу за мдицинской помощью')
+        bot.send_message(message.chat.id, text='На изображении видная опухоль, пожалуйста, обратитесь к врачу за медицинской помощью')
+        answer = 'На изображении видная опухоль, пожалуйста, обратитесь к врачу за мдицинской помощью'
 
     elif confidence < 0.6:
         bot.send_message(message.chat.id,text='Выявлена аномалия, пожалуйста, обратитесь к специалисту за дополнительной помощью')
+        answer = 'На изображении видная опухоль, пожалуйста, обратитесь к врачу за мдицинской помощью'
 
     photo_path = 'mrt.jpg'
     with open('mrt.jpg', 'rb') as photo:
         bot.send_photo(message.chat.id, photo=photo)
     os.remove('mrt.jpg')
 
+    conn = sqlite3.connect('bot_base.db')
+    cursor = conn.cursor()
+
+    activity = f'Использование модели TWCLow, уверенность модели: {confidence}'
+
+    query = f"INSERT INTO user_activity (user_id, activity, time) VALUES (?, ?, datetime('now'))"
+    data = (message.chat.id, activity)
+    cursor.execute(query, data)
+
+    query = f"INSERT INTO predictions (user_id, predictions, answer, time) VALUES (?, ?, ?, datetime('now'))"
+    data = (message.chat.id, confidence, answer)
+    cursor.execute(query, data)
+
+    conn.commit()
+    conn.close()
+
     work(message)
-
-
-
-
 
 @bot.message_handler(content_types=['photo'], func=lambda m: user_states.get(m.chat.id) == TWC_PHOTO)
 def twc(message):
